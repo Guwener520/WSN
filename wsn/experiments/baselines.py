@@ -31,6 +31,7 @@ class RandomBaseline:
                 self.env.width, self.env.height,
                 self.env.grid_resolution, self.env.n_nodes,
                 self.env.sensing_radius, self.env.communication_radius,
+                obstacles=self.env.obstacles,
             )
             env_copy.set_positions(positions)
             metrics = self.evaluator.evaluate_from_environment(env_copy)
@@ -61,6 +62,7 @@ class GridBaseline:
             self.env.width, self.env.height,
             self.env.grid_resolution, self.env.n_nodes,
             self.env.sensing_radius, self.env.communication_radius,
+            obstacles=self.env.obstacles,
         )
         env_copy.set_positions(positions)
         metrics = self.evaluator.evaluate_from_environment(env_copy)

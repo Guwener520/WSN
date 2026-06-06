@@ -2,6 +2,11 @@
 
 Supports optional GPU acceleration via CuPy for distance computations.
 Set use_gpu=True to use GPU, falls back to CPU if CuPy is unavailable.
+
+Obstacles: pass obstacles=[{"type":"rect","x":x0,"y":y0,"w":w,"h":h}, ...]
+or obstacles=[{"type":"circle","cx":x,"cy":y,"r":r}, ...] to mark regions
+as invalid (no grid points, no coverage contribution). This models walls,
+pillars, lakes, etc. in realistic deployment scenarios.
 """
 
 import numpy as np
@@ -27,6 +32,7 @@ class WSNEnvironment:
         communication_radius: float = 24.0,
         seed: int | None = None,
         use_gpu: bool = False,
+        obstacles: list[dict] | None = None,
     ):
         self.width = width
         self.height = height
@@ -35,6 +41,7 @@ class WSNEnvironment:
         self.sensing_radius = sensing_radius
         self.communication_radius = communication_radius
         self.use_gpu = use_gpu and _HAS_CUPY
+        self.obstacles = obstacles or []
 
         self.rng = np.random.default_rng(seed)
 
@@ -42,10 +49,13 @@ class WSNEnvironment:
         x = np.arange(0, width + grid_resolution, grid_resolution)
         y = np.arange(0, height + grid_resolution, grid_resolution)
         self.grid_x, self.grid_y = np.meshgrid(x, y)
-        self.grid_points = np.column_stack(
-            (self.grid_x.ravel(), self.grid_y.ravel())
-        )
+        all_points = np.column_stack((self.grid_x.ravel(), self.grid_y.ravel()))
+
+        # Compute valid mask (points NOT inside any obstacle)
+        self._valid_mask = self._compute_valid_mask(all_points)
+        self.grid_points = all_points[self._valid_mask]    # only valid grid points
         self.n_grid_points = len(self.grid_points)
+        self.n_total_grid_points = len(all_points)
 
         # GPU cache
         self._grid_points_gpu: "cp.ndarray | None" = None  # type: ignore[name-defined]
@@ -53,14 +63,82 @@ class WSNEnvironment:
         self.node_positions: np.ndarray | None = None
 
     # ------------------------------------------------------------------
+    # Obstacle handling
+    # ------------------------------------------------------------------
+    def _compute_valid_mask(self, points: np.ndarray) -> np.ndarray:
+        """Return boolean mask: True for points NOT inside any obstacle."""
+        if not self.obstacles:
+            return np.ones(len(points), dtype=bool)
+
+        inside_any = np.zeros(len(points), dtype=bool)
+        for obs in self.obstacles:
+            if obs["type"] == "rect":
+                inside = (
+                    (points[:, 0] >= obs["x"])
+                    & (points[:, 0] <= obs["x"] + obs["w"])
+                    & (points[:, 1] >= obs["y"])
+                    & (points[:, 1] <= obs["y"] + obs["h"])
+                )
+            elif obs["type"] == "circle":
+                d2 = (points[:, 0] - obs["cx"]) ** 2 + (points[:, 1] - obs["cy"]) ** 2
+                inside = d2 <= obs["r"] ** 2
+            else:
+                raise ValueError(f"Unknown obstacle type: {obs['type']}")
+            inside_any |= inside
+
+        return ~inside_any
+
+    @property
+    def valid_area_fraction(self) -> float:
+        """Fraction of grid points that are valid (not blocked by obstacles)."""
+        return self.n_grid_points / self.n_total_grid_points
+
+    # ------------------------------------------------------------------
     # Node deployment
     # ------------------------------------------------------------------
+    def _is_valid_position(self, pos: np.ndarray) -> np.ndarray:
+        """Check if positions are outside obstacles. pos shape (K, 2)."""
+        if not self.obstacles:
+            return np.ones(len(pos), dtype=bool)
+        valid = np.ones(len(pos), dtype=bool)
+        for obs in self.obstacles:
+            if obs["type"] == "rect":
+                inside = (
+                    (pos[:, 0] > obs["x"])
+                    & (pos[:, 0] < obs["x"] + obs["w"])
+                    & (pos[:, 1] > obs["y"])
+                    & (pos[:, 1] < obs["y"] + obs["h"])
+                )
+            elif obs["type"] == "circle":
+                d2 = (pos[:, 0] - obs["cx"]) ** 2 + (pos[:, 1] - obs["cy"]) ** 2
+                inside = d2 < obs["r"] ** 2
+            valid &= ~inside
+        return valid
+
     def random_deploy(self, seed: int | None = None) -> np.ndarray:
         if seed is not None:
             self.rng = np.random.default_rng(seed)
-        self.node_positions = self.rng.uniform(
-            low=[0, 0], high=[self.width, self.height], size=(self.n_nodes, 2)
-        )
+
+        if not self.obstacles:
+            self.node_positions = self.rng.uniform(
+                low=[0, 0], high=[self.width, self.height], size=(self.n_nodes, 2)
+            )
+            return self.node_positions
+
+        # Rejection sampling for obstacle-avoidant placement
+        positions = np.empty((self.n_nodes, 2))
+        placed = 0
+        while placed < self.n_nodes:
+            candidates = self.rng.uniform(
+                low=[0, 0], high=[self.width, self.height],
+                size=(self.n_nodes - placed, 2),
+            )
+            valid = self._is_valid_position(candidates)
+            to_place = min(np.sum(valid), self.n_nodes - placed)
+            positions[placed : placed + to_place] = candidates[valid][:to_place]
+            placed += to_place
+
+        self.node_positions = positions
         return self.node_positions
 
     def grid_deploy(self) -> np.ndarray:
@@ -74,7 +152,21 @@ class WSNEnvironment:
         )
         xx, yy = np.meshgrid(x_positions, y_positions)
         positions = np.column_stack((xx.ravel(), yy.ravel()))
-        return positions[: self.n_nodes]
+        # Filter out positions inside obstacles
+        valid = self._is_valid_position(positions)
+        positions = positions[valid]
+        # Pad with random valid positions if we lost too many
+        if len(positions) < self.n_nodes:
+            extra = self.rng.uniform(
+                low=[0, 0], high=[self.width, self.height],
+                size=(self.n_nodes * 5, 2),  # oversample then filter
+            )
+            extra_valid = self._is_valid_position(extra)
+            extra = extra[extra_valid]
+            positions = np.vstack([positions, extra])
+        positions = positions[: self.n_nodes]
+        self.node_positions = positions
+        return self.node_positions
 
     def set_positions(self, positions: np.ndarray) -> None:
         if positions.shape != (self.n_nodes, 2):
