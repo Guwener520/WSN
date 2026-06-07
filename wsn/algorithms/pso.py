@@ -111,7 +111,13 @@ class PSO(SwarmOptimizer):
 
 
 class ImprovedPSO(PSO):
-    """PSO variant with chaotic initialization, adaptive inertia, and Gaussian mutation."""
+    """PSO variant with selectable improvement strategies.
+
+    Switches for ablation studies:
+      use_chaotic_init:  Logistic map initialization (default True)
+      use_adaptive_w:    Linearly decaying inertia weight (default True)
+      use_mutation:      Gaussian mutation in later iterations (default True)
+    """
 
     def __init__(
         self,
@@ -126,6 +132,9 @@ class ImprovedPSO(PSO):
         mutation_rate: float = 0.1,
         mutation_scale: float = 0.05,
         seed: int | None = None,
+        use_chaotic_init: bool = True,
+        use_adaptive_w: bool = True,
+        use_mutation: bool = True,
     ):
         super().__init__(
             env, fitness_evaluator, n_particles, w_start, c1, c2, max_iter, seed
@@ -134,14 +143,20 @@ class ImprovedPSO(PSO):
         self.w_end = w_end
         self.mutation_rate = mutation_rate
         self.mutation_scale = mutation_scale
+        self.use_chaotic_init = use_chaotic_init
+        self.use_adaptive_w = use_adaptive_w
+        self.use_mutation = use_mutation
 
     def optimize(self, verbose: bool = False) -> tuple[np.ndarray, float]:
         n = self.n_particles
         d = self.dim
 
-        # Chaotic initialization
-        chaotic_seq = init_chaotic_sequence(n * d, self.rng)
-        positions = self.lb + chaotic_seq.reshape(n, d) * (self.ub - self.lb)
+        # Initialization
+        if self.use_chaotic_init:
+            chaotic_seq = init_chaotic_sequence(n * d, self.rng)
+            positions = self.lb + chaotic_seq.reshape(n, d) * (self.ub - self.lb)
+        else:
+            positions = self.rng.uniform(low=self.lb, high=self.ub, size=(n, d))
         velocities = np.zeros((n, d))
 
         pbest_pos = positions.copy()
@@ -157,10 +172,10 @@ class ImprovedPSO(PSO):
         gbest_pos = self.best_pos.copy()
 
         for it in range(self.max_iter):
-            # Adaptive inertia weight (linear decay)
-            w = adaptive_inertia_weight(
-                it, self.max_iter, self.w_start, self.w_end
-            )
+            if self.use_adaptive_w:
+                w = adaptive_inertia_weight(it, self.max_iter, self.w_start, self.w_end)
+            else:
+                w = self.w
 
             r1 = self.rng.random((n, d))
             r2 = self.rng.random((n, d))
@@ -182,14 +197,14 @@ class ImprovedPSO(PSO):
                     self.best_pos = positions[i].copy()
                     gbest_pos = self.best_pos.copy()
 
-            # Gaussian mutation in later iterations
-            positions = gaussian_mutation(
-                positions, self.lb, self.ub,
-                iteration=it, max_iter=self.max_iter,
-                mutation_rate=self.mutation_rate,
-                scale=self.mutation_scale,
-                rng=self.rng,
-            )
+            if self.use_mutation:
+                positions = gaussian_mutation(
+                    positions, self.lb, self.ub,
+                    iteration=it, max_iter=self.max_iter,
+                    mutation_rate=self.mutation_rate,
+                    scale=self.mutation_scale,
+                    rng=self.rng,
+                )
 
             best_for_it = {
                 "iteration": it,
@@ -198,6 +213,7 @@ class ImprovedPSO(PSO):
             }
             self.history.append(best_for_it)
             if verbose and (it + 1) % 20 == 0:
-                print(f"  ImprovedPSO iter {it + 1:3d}: fitness={self.best_fitness:.4f}")
+                label = "ImpPSO" if (self.use_chaotic_init and self.use_adaptive_w and self.use_mutation) else "AblPSO"
+                print(f"  {label} iter {it + 1:3d}: fitness={self.best_fitness:.4f}")
 
         return self._decode(self.best_pos), self.best_fitness
