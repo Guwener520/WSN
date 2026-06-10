@@ -11,5 +11,6 @@ setup(
         "matplotlib>=3.7",
         "plotly>=5.14",
         "scipy>=1.10",
+        "imageio>=2.31",
     ],
 )

@@ -1,9 +1,31 @@
 """Dynamic visualization: create GIF of the optimization process."""
 
-import tempfile
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+
+from wsn.visualization.static_plots import plot_deployment
+
+
+def _snapshot_schedule(max_iter: int, snapshot_iters: list[int] | None) -> set[int]:
+    if snapshot_iters is None:
+        step = max(1, max_iter // 30)
+        values = list(range(0, max_iter + 1, step))
+    else:
+        values = [int(i) for i in snapshot_iters]
+
+    values.extend([0, max_iter])
+    return {min(max(i, 0), max_iter) for i in values}
+
+
+def _deployment_frame(env, positions: np.ndarray, title: str, dpi: int) -> np.ndarray:
+    fig, ax = plt.subplots(figsize=(6, 6), dpi=dpi)
+    plot_deployment(env, node_positions=positions, ax=ax, title=title)
+    fig.tight_layout()
+    fig.canvas.draw()
+    frame = np.asarray(fig.canvas.buffer_rgba()).copy()
+    plt.close(fig)
+    return frame
 
 
 def make_optimization_gif(
@@ -30,66 +52,30 @@ def make_optimization_gif(
     Note: Calling optimize() will mutate the algorithm's state and env.
     If you need the final result separately, save it before calling this.
     """
-    try:
-        import imageio.v2 as imageio
-    except ImportError:
-        import imageio
+    snapshot_set = _snapshot_schedule(algorithm.max_iter, snapshot_iters)
+    positions_over_time: list[np.ndarray] = []
+    titles: list[str] = []
 
-    if snapshot_iters is None:
-        snapshot_iters = list(range(0, algorithm.max_iter, max(1, algorithm.max_iter // 30)))
+    def capture(iteration: int, positions: np.ndarray, fitness: float, _: dict) -> None:
+        if iteration not in snapshot_set:
+            return
+        positions_over_time.append(positions)
+        titles.append(f"Iteration {iteration} | best fitness={fitness:.4f}")
 
-    # We need to capture node positions at the specified iterations.
-    # Run optimization step-by-step so we can snapshot.
-    from wsn.algorithms._base import SwarmOptimizer
+    best_positions, best_fitness = algorithm.optimize(verbose=False, callback=capture)
+    if algorithm.max_iter not in snapshot_set or not positions_over_time:
+        positions_over_time.append(best_positions)
+        titles.append(f"Iteration {algorithm.max_iter} | best fitness={best_fitness:.4f}")
 
-    # We'll subclass to intercept snapshots — simpler: run PSO/GWO/WOA manually via their own iterate pattern.
-    # Instead, capture positions by running the full optimize and recording
-    # along the way through a custom callback mechanism.
-    # For simplicity: we call optimize with a hook.
-    frames = []
-
-    # Re-initialize positions for capture
-    rng = np.random.default_rng(42)
-    n = getattr(algorithm, "n_particles",
-                getattr(algorithm, "n_wolves",
-                        getattr(algorithm, "n_whales", 30)))
-    d = algorithm.dim
-    positions = rng.uniform(low=algorithm.lb, high=algorithm.ub, size=(n, d))
-
-    # Snap initial
-    env.set_positions(algorithm._decode(positions[0]))
-    fig, ax = plt.subplots(figsize=(6, 6))
-    from wsn.visualization.static_plots import plot_deployment
-    ax = plot_deployment(env, title=f"Iteration 0 (initial)")
-    fig.canvas.draw()
-    img = np.array(fig.canvas.renderer.buffer_rgba())
-    frames.append(img)
-    plt.close(fig)
-
-    # For a proper implementation with per-iteration capture, the algorithms
-    # would need to support a callback. For the demo, we generate
-    # a representative set of frames using the algorithm's history.
-    best_positions = None
-    for it in range(algorithm.max_iter):
-        # We can't easily step iteration-by-iteration without running optimize()
-        # So we just capture after the fact by re-running with a seed.
-        pass  # Will be implemented properly when used with actual runs.
-
-    # Actually run optimization normally, capturing progress
-    def _capture_run(alg, _env, _snapshots):
-        """Run and capture frames at specified iteration indices."""
-        _frames = []
-        # We call the full optimize, but snapshot via re-evaluation at tracked points.
-        # Simpler: re-implement inside the loop.
-        return _frames
-
-    # For the MVP: use a simpler approach — generate GIF from history + final positions
-    # by re-running with different random seeds or capturing during a dedicated run.
-    #
-    # Since we cannot easily patch the algorithm internals here, we implement a
-    # lightweight capture-enabled optimization loop for GIF generation.
-
-    return filename
+    env.set_positions(best_positions)
+    return make_optimization_gif_from_positions(
+        env,
+        positions_over_time,
+        filename=filename,
+        fps=fps,
+        dpi=dpi,
+        titles=titles,
+    )
 
 
 def make_optimization_gif_from_positions(
@@ -98,6 +84,7 @@ def make_optimization_gif_from_positions(
     filename: str = "optimization.gif",
     fps: int = 5,
     dpi: int = 80,
+    titles: list[str] | None = None,
 ) -> str:
     """Build a GIF from a pre-recorded list of node position snapshots.
 
@@ -107,6 +94,7 @@ def make_optimization_gif_from_positions(
         filename: output path.
         fps: frames per second.
         dpi: resolution.
+        titles: optional frame titles; length must match positions_over_time.
 
     Returns:
         Path to the saved GIF.
@@ -116,15 +104,18 @@ def make_optimization_gif_from_positions(
     except ImportError:
         import imageio
 
+    if not positions_over_time:
+        raise ValueError("positions_over_time must contain at least one frame.")
+    if fps <= 0:
+        raise ValueError("fps must be greater than zero.")
+    if titles is not None and len(titles) != len(positions_over_time):
+        raise ValueError("titles length must match positions_over_time length.")
+
     frames = []
     for idx, positions in enumerate(positions_over_time):
-        fig, ax = plt.subplots(figsize=(6, 6))
-        from wsn.visualization.static_plots import plot_deployment
-        ax = plot_deployment(env, node_positions=positions, title=f"Iteration {idx}")
-        fig.canvas.draw()
-        img = np.array(fig.canvas.renderer.buffer_rgba())
-        frames.append(img)
-        plt.close(fig)
+        title = titles[idx] if titles is not None else f"Iteration {idx}"
+        frames.append(_deployment_frame(env, positions, title, dpi))
 
-    imageio.mimsave(filename, frames, fps=fps, loop=0)
+    os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
+    imageio.mimsave(filename, frames, duration=max(1, int(1000 / fps)), loop=0)
     return filename

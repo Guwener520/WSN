@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from wsn.algorithms._base import SwarmOptimizer
+from wsn.algorithms._base import SnapshotCallback, SwarmOptimizer
 from wsn.improvements.chaotic_init import init_chaotic_sequence
 from wsn.improvements.adaptive_params import adaptive_woa_a
 from wsn.improvements.mutation import gaussian_mutation
@@ -50,7 +50,11 @@ class WOA(SwarmOptimizer):
         return self.evaluator.evaluate_from_environment(self.env).fitness
 
     # ------------------------------------------------------------------
-    def optimize(self, verbose: bool = False) -> tuple[np.ndarray, float]:
+    def optimize(
+        self,
+        verbose: bool = False,
+        callback: SnapshotCallback | None = None,
+    ) -> tuple[np.ndarray, float]:
         n = self.n_whales
         d = self.dim
 
@@ -62,6 +66,11 @@ class WOA(SwarmOptimizer):
             if fitnesses[i] > self.best_fitness:
                 self.best_fitness = fitnesses[i]
                 self.best_pos = positions[i].copy()
+
+        self._notify_callback(
+            callback, 0, self._decode(self.best_pos), self.best_fitness,
+            {"phase": "initial"},
+        )
 
         for it in range(self.max_iter):
             a = 2.0 * (1.0 - it / self.max_iter)
@@ -107,6 +116,10 @@ class WOA(SwarmOptimizer):
                 "coverage": self.evaluator.evaluate_from_environment(self.env).coverage_rate,
             }
             self.history.append(best_for_it)
+            self._notify_callback(
+                callback, it + 1, self._decode(self.best_pos), self.best_fitness,
+                {"phase": "iteration"},
+            )
             if verbose and (it + 1) % 20 == 0:
                 print(f"  WOA iter {it + 1:3d}: fitness={self.best_fitness:.4f}")
 
@@ -131,7 +144,11 @@ class ImprovedWOA(WOA):
         self.mutation_rate = mutation_rate
         self.mutation_scale = mutation_scale
 
-    def optimize(self, verbose: bool = False) -> tuple[np.ndarray, float]:
+    def optimize(
+        self,
+        verbose: bool = False,
+        callback: SnapshotCallback | None = None,
+    ) -> tuple[np.ndarray, float]:
         n = self.n_whales
         d = self.dim
 
@@ -145,6 +162,11 @@ class ImprovedWOA(WOA):
             if fitnesses[i] > self.best_fitness:
                 self.best_fitness = fitnesses[i]
                 self.best_pos = positions[i].copy()
+
+        self._notify_callback(
+            callback, 0, self._decode(self.best_pos), self.best_fitness,
+            {"phase": "initial"},
+        )
 
         for it in range(self.max_iter):
             a = adaptive_woa_a(it, self.max_iter)  # nonlinear decay
@@ -194,6 +216,10 @@ class ImprovedWOA(WOA):
                 "coverage": self.evaluator.evaluate_from_environment(self.env).coverage_rate,
             }
             self.history.append(best_for_it)
+            self._notify_callback(
+                callback, it + 1, self._decode(self.best_pos), self.best_fitness,
+                {"phase": "iteration"},
+            )
             if verbose and (it + 1) % 20 == 0:
                 print(f"  ImprovedWOA iter {it + 1:3d}: fitness={self.best_fitness:.4f}")
 

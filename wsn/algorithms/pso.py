@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from wsn.algorithms._base import SwarmOptimizer
+from wsn.algorithms._base import SnapshotCallback, SwarmOptimizer
 from wsn.improvements.chaotic_init import init_chaotic_sequence
 from wsn.improvements.adaptive_params import adaptive_inertia_weight
 from wsn.improvements.mutation import gaussian_mutation
@@ -56,7 +56,11 @@ class PSO(SwarmOptimizer):
         return self.evaluator.evaluate_from_environment(self.env).fitness
 
     # ------------------------------------------------------------------
-    def optimize(self, verbose: bool = False) -> tuple[np.ndarray, float]:
+    def optimize(
+        self,
+        verbose: bool = False,
+        callback: SnapshotCallback | None = None,
+    ) -> tuple[np.ndarray, float]:
         n = self.n_particles
         d = self.dim
 
@@ -75,6 +79,10 @@ class PSO(SwarmOptimizer):
                 self.best_pos = positions[i].copy()
 
         gbest_pos = self.best_pos.copy()
+        self._notify_callback(
+            callback, 0, self._decode(self.best_pos), self.best_fitness,
+            {"phase": "initial"},
+        )
 
         for it in range(self.max_iter):
             w = self.w  # constant; may be overridden by adaptive variant
@@ -104,6 +112,10 @@ class PSO(SwarmOptimizer):
                 "coverage": self.evaluator.evaluate_from_environment(self.env).coverage_rate,
             }
             self.history.append(best_for_it)
+            self._notify_callback(
+                callback, it + 1, self._decode(self.best_pos), self.best_fitness,
+                {"phase": "iteration"},
+            )
             if verbose and (it + 1) % 20 == 0:
                 print(f"  PSO iter {it + 1:3d}: fitness={self.best_fitness:.4f}")
 
@@ -135,7 +147,11 @@ class ImprovedPSO(PSO):
         self.mutation_rate = mutation_rate
         self.mutation_scale = mutation_scale
 
-    def optimize(self, verbose: bool = False) -> tuple[np.ndarray, float]:
+    def optimize(
+        self,
+        verbose: bool = False,
+        callback: SnapshotCallback | None = None,
+    ) -> tuple[np.ndarray, float]:
         n = self.n_particles
         d = self.dim
 
@@ -155,6 +171,10 @@ class ImprovedPSO(PSO):
                 self.best_pos = positions[i].copy()
 
         gbest_pos = self.best_pos.copy()
+        self._notify_callback(
+            callback, 0, self._decode(self.best_pos), self.best_fitness,
+            {"phase": "initial"},
+        )
 
         for it in range(self.max_iter):
             # Adaptive inertia weight (linear decay)
@@ -197,6 +217,10 @@ class ImprovedPSO(PSO):
                 "coverage": self.evaluator.evaluate_from_environment(self.env).coverage_rate,
             }
             self.history.append(best_for_it)
+            self._notify_callback(
+                callback, it + 1, self._decode(self.best_pos), self.best_fitness,
+                {"phase": "iteration"},
+            )
             if verbose and (it + 1) % 20 == 0:
                 print(f"  ImprovedPSO iter {it + 1:3d}: fitness={self.best_fitness:.4f}")
 

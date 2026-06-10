@@ -35,7 +35,15 @@
 ## Installation
 
 ```bash
-# Create conda environment
+# Recommended: uv
+uv sync --extra dev
+uv run pytest tests/ -v
+uv run python run_quick.py
+
+# Optional: install notebook support
+uv sync --extra notebook
+
+# Or create conda environment
 conda env create -f environment.yml
 conda activate wsn
 
@@ -44,6 +52,10 @@ python -m venv venv && source venv/bin/activate   # Linux/Mac
 python -m venv venv && venv\Scripts\activate      # Windows
 pip install -r requirements.txt
 ```
+
+This repository keeps `uv.lock` in version control for reproducible uv installs.
+Local environments such as `.venv/`, `venv/`, Conda-in-repo folders, caches, and
+experiment outputs are ignored by `.gitignore`.
 
 ## Quick Start
 
@@ -69,22 +81,27 @@ print(f"Best fitness: {best_fitness:.4f}")
 ## Comparing Algorithms
 
 ```python
-from wsn.algorithms import PSO, ImprovedPSO, GWO, ImprovedGWO
+from wsn.environment import WSNEnvironment
+from wsn.algorithms import PSO, ImprovedGWO
 from wsn.experiments import RandomBaseline, GridBaseline, ExperimentRunner
 
+env_config = dict(width=100, height=100, grid_resolution=2.0,
+                  n_nodes=50, sensing_radius=12.0, communication_radius=24.0)
 runner = ExperimentRunner(
-    env_config=dict(width=100, height=100, grid_resolution=2.0,
-                    n_nodes=50, sensing_radius=12.0, communication_radius=24.0),
+    env_config=env_config,
     fitness_weights=(0.5, 0.3, 0.2),
 )
 
-runner.add_baseline("Random", RandomBaseline(env_rand, evaluator, n_trials=30))
-runner.add_baseline("Grid", GridBaseline(env_grid, evaluator))
-runner.add_algorithm("PSO", PSO(env_pso, evaluator, max_iter=200, seed=42))
-runner.add_algorithm("ImprovedGWO", ImprovedGWO(env_igwo, evaluator, max_iter=200, seed=42))
+runner.add_baseline("Random", RandomBaseline(WSNEnvironment(**env_config), runner.evaluator, n_trials=30))
+runner.add_baseline("Grid", GridBaseline(WSNEnvironment(**env_config), runner.evaluator))
+runner.add_algorithm("PSO", PSO(WSNEnvironment(**env_config), runner.evaluator, max_iter=200, seed=42))
+runner.add_algorithm("ImprovedGWO", ImprovedGWO(WSNEnvironment(**env_config), runner.evaluator, max_iter=200, seed=42))
 
 results = runner.run_all(verbose=True)
 runner.print_summary()
+runner.save_summary_csv("results/comparison_summary.csv")
+runner.save_results_json("results/comparison_results.json")
+runner.plot_metric_bar("coverage", filename="results/comparison_coverage.png")
 ```
 
 ## Project Structure

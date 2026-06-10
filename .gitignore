@@ -12,6 +12,10 @@ build/
 venv/
 .venv/
 env/
+.env/
+ENV/
+.conda/
+conda-meta/
 
 # IDE / Editor
 .vscode/
@@ -25,6 +29,10 @@ env/
 
 # Testing
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
 htmlcov/
 .coverage
 *.cover
@@ -36,5 +44,10 @@ Thumbs.db
 # Conda
 *.condaenv.*.requirements.txt
 
+# uv
+# Keep uv.lock committed so the team can reproduce one shared dependency set.
+
 # Experiment output
 results/
+outputs/
+*.log
